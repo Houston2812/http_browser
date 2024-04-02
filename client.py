@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 import shutil
 import time
 import socket
@@ -7,7 +8,6 @@ import argparse
 from colorama import Fore
 from colorama import Style
 from colorama import init as colorama_init
-
 
 BUF_SIZE = 4096
 colorama_init()
@@ -31,20 +31,20 @@ class Logger:
             'message': '[...]'
         }
 
-    def info(self, msg):
+    def info(self, msg=''):
         level = 'info'
         print(f"{self.colors[level]}client.py - {level.upper()} - {self.signs[level]} {msg}{Style.RESET_ALL}")
 
-    def debug(self, msg):
+    def debug(self, msg=''):
         level= 'debug'
         # print(f"{self.colors[level]}client.py - {level.upper()} - {self.signs[level]} {msg}{Style.RESET_ALL}")
         pass
 
-    def warning(self, msg):
+    def warning(self, msg=''):
         level = 'warning'
         print(f"{self.colors[level]}client.py - {level.upper()} - {self.signs[level]} {msg}{Style.RESET_ALL}")
 
-    def error(self, msg):
+    def error(self, msg=''):
         level = 'error'
         print(f"{self.colors[level]}client.py - {level.upper()} - {self.signs[level]} {msg}{Style.RESET_ALL}")
 
@@ -119,31 +119,16 @@ def parse_dependency_response(body):
     
     return root
 
-    # for dependency in dependencies:
-    #     elements = dependency.split(',')
-    #     logger.debug(f"Elements: {elements}")
-    #     if len(elements[1]) == 0:
-    #         key = elements[0].strip(',')
-    #         dependency_table[key] = []
-    #     else:
-    #         key = elements[1].strip(',')
-    #         value = elements[0].strip(',')
-            
-    #         dependency_table[key].append(value)
-    #         dependency_table[value] = []
-
-    # return dependency_table
-
 def handle_proj_directory():
     shutil.rmtree("./proj")
     logger.info("Deleted ./proj/ folder")
     os.mkdir('./proj')
     logger.info("Initialized ./proj/ folder")
 
-def create_file(filename, data, bytes=False):
+def create_file(filename, data, image_flag=False):
     flags = ''
 
-    if bytes:
+    if image_flag:
         flags = 'wb'
     else:
         flags = 'w'
@@ -152,6 +137,9 @@ def create_file(filename, data, bytes=False):
         file.write(data)
 
     logger.info(f'File: {filename} is created')
+    # if filename=='image(10).png':
+    #     sys.exit()
+        
 
     return filename 
 
@@ -183,14 +171,11 @@ def send_request(client_socket, url):
     
     time.sleep(1)
 
-    dependencies = None
+  
+    header, body = get_response(client_socket=client_socket)
 
-    for response in responses:
-        header, body = get_response(client_socket=client_socket)
-        response = [header, body]
-
-        logger.info(f"Server response: {header}")
-        dependency_root = parse_dependency_response(body)
+    logger.info(f"Server response: {header}")
+    dependency_root = parse_dependency_response(body)
 
     logger.debug(f"Dependency table: {dependency_root.postorder()}")
 
@@ -247,21 +232,29 @@ def download_files(filenames, client_socket):
 
         requests.append(filename.value)
     
-    # for request in requests:
+    # server_response = handle_response(client_socket=client_socket)
+    time.sleep(0.1)
+    responses = handle_response(client_socket=client_socket)
+    
+    # logger.error(f"Responses: {responses}")
+    for index, request in enumerate(requests):
 
-        time.sleep(0.5)
-        byte_flag = False
-        if '.png' in filename.value:
-            header, body = get_response(client_socket=client_socket, decode=False)
-            byte_flag = True
+        if '.png' in request:
+            image_flag = True
         else:
-            header, body = get_response(client_socket=client_socket)
+            image_flag = False
         
-        created_files.append(create_file(filename.value, body, bytes=byte_flag))
+         
+        # logger.warning(f"Request to decode: {request}; Response: {responses[index]} Flag: {image_flag}")
+        header, body = parse_response(responses[index], image_flag=image_flag)
+
+        logger.warning(body)
+        created_files.append(create_file(request, body, image_flag=image_flag))
 
     return created_files
 
 def handle_response(client_socket):
+    responses = []
     server_response = b''
     
     try:
@@ -275,6 +268,59 @@ def handle_response(client_socket):
     except BlockingIOError:
         pass
     
+    # http_pattern = b'\x48\x54\x54\x50\x2f\x31\x2e\x31'
+    http_pattern = b'\x48\x54\x54\x50\x2f\x31\x2e\x31\x20\x32\x30\x30\x20\x4f\x4b'
+
+    offset = 0
+
+    indices = []
+    
+    # logger.warning(server_response)
+
+    while True:
+
+        index = server_response[offset:].find(http_pattern)
+    
+        if index != -1:
+            indices.append(index + offset)
+        else:
+            indices.append(index)
+        
+        offset = offset + index + len(http_pattern)
+        
+      
+        if index == -1:
+            break
+    logger.warning(f"Indices: {indices}")
+
+    for index, val in enumerate(indices):
+        if index == 0:
+            continue
+        logger.info(f"Index: {index-1}, {index}")
+
+        if indices[index] == -1:
+            response = server_response[indices[index-1]:]
+        else: 
+            response = server_response[indices[index-1]:indices[index]]
+        responses.append(response)
+
+    return responses
+
+def parse_response(response, image_flag=True):
+    index = response.find(b'\x0d\x0a\x0d\x0a')
+
+    logger.debug(f"CRLF index: {index}")
+
+    header = response[:index]
+    body = response[index+4:]
+
+    if image_flag:
+        logger.debug(f"Body: {body}")
+        return header.decode(), body
+    else:
+        return header.decode(), body.decode()
+
+
 def get_response(client_socket, decode=True ):
     server_response = b''
     header = b''
@@ -291,17 +337,23 @@ def get_response(client_socket, decode=True ):
     except BlockingIOError:
         pass
     
-    index = server_response.find(b'\x0d\x0a\x0d\x0a')
-    
-    logger.debug(f'Parse index: {index}')
-    header = server_response[:index]
-    body = server_response[index+4:]
+    logger.warning(server_response)
+    logger.error(server_response.decode())
 
-    if not decode:
-        logger.debug(f"Body: {body}")
-        return header.decode(), body
-    else:
-        return header.decode(), body.decode()
+    header, body = parse_response(server_response, False)
+
+    return header, body
+    # index = server_response.find(b'\x0d\x0a\x0d\x0a')
+    
+    # logger.debug(f'Parse index: {index}')
+    # header = server_response[:index]
+    # body = server_response[index+4:]
+
+    # if not decode:
+    #     logger.debug(f"Body: {body}")
+    #     return header.decode(), body
+    # else:
+    #     return header.decode(), body.decode()
 
 def parse_url(url):
     # pattern = 'http:\/\/(\w+):?([0-9]+)?\/(\w+)*\/([^#?\s]+)'

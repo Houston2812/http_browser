@@ -37,8 +37,29 @@ class Node:
             for child in self.children:
                 yield from child.postorder()
 
+    def length(self, root):   
+        if len(root.children) == 0:
+            return 1
+    
+        sum = 0
+        for child in root.children:
+            sum += self.length(child)
        
-      
+        
+        return 1 + sum
+
+def round_robin(dependency_root, connections, requests):
+    dependency_generator = dependency_root.postorder()
+    while True:
+        try:
+            depdency = next(dependency_generator)
+            count +=1
+        except:
+            print(f"Finished")
+            break
+        print(f"{depdency}")
+
+    
 def read_file(filename):
     dependencies = []
     with open(filename, 'r') as file:
@@ -99,7 +120,14 @@ if __name__ == "__main__":
 
     root.create(dependencies=data)
 
+    print(f"Len: {root.length(root)}")
+    connections = {}
+    connections[1] = 'a'
+    connections[2] = 'a'
+    connections[3] = 'a'
 
+    round_robin(root, connections, [])
+    
     print("\n\nPrinting tree")
     queried = []
 

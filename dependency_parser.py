@@ -110,7 +110,7 @@ def create_tree(dependencies):
         
     return root
 if __name__ == "__main__":
-    filename = "dependency.csv"
+    filename = "proj/dependency.csv"
 
     data = read_file(filename)
     print(data)

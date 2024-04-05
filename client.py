@@ -338,7 +338,7 @@ def parse_url(url):
             host - hostname of the target
             port - port of the target
     '''
-    pattern = '(\w+):?([0-9]+)?'
+    pattern = '([A-Za-z0-9.]+):?([0-9]+)?'
     tokens = re.split(pattern, url)
 
     logger.debug(f"Tokens: {tokens}")

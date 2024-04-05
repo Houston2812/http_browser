@@ -381,8 +381,6 @@ def get_dependencies(client_socket, host, port):
         logger.debug(f"Hanlding dependency response")
      
         if content_type == 'application':
-            # body = body.decode()
-
             logger.debug(f"Dependency body: {body}")
             # parse the dependency file and create n-ary tree of dependencies
             dependency_root = create_dependency_tree(body)

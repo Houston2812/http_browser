@@ -300,8 +300,10 @@ def initialize_proj_directory():
     '''
         Function to initialize the directory for the downloaded files.
     '''
-    shutil.rmtree("./proj")
-    logger.info("Deleted ./proj/ folder")
+    isExist = os.path.exists("./proj")
+    if isExist:
+        shutil.rmtree("./proj")
+        logger.info("Deleted ./proj/ folder")
     os.mkdir('./proj')
     logger.info("Initialized ./proj/ folder")
 

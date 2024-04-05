@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 import time
 import math
 import socket
@@ -283,7 +284,7 @@ def create_dependency_tree(body):
         Output:
             root - root of the dependency tree
     '''
-    logger.warning(f'Body: {body}')
+   
     create_file('dependency.csv', body, image_flag=False)
 
     dependencies = body.strip('\r\n').split('\n')
@@ -323,37 +324,6 @@ def create_file(filename, data, image_flag=False):
         file.write(data)
 
     logger.info(f'File: {filename} is created')
-
-
-def parse_response(response, image_flag=True):
-    '''
-        Function to get the header and body from the response.
-
-        Parameters:
-            @response   - response received from server.
-            @image_flag - flag to identify if the excpected response is an image or text.
-
-        Output:
-            header - header of the response
-            body   - body of the response
-    '''
-    index = response.find(b'\x0d\x0a\x0d\x0a')
-
-    logger.debug(f"CRLF index: {index}")
-
-    header = response[:index]
-    body = response[index+4:]
-
-    logger.debug(f"Header: {header.decode()}")
-
-    return header.decode(), body
-
-    # if image_flag:
-    #     # logger.debug(f"Body: {body}")
-
-    #     return header.decode(), body
-    # else:
-    #     return header.decode(), body.decode()
 
 def parse_url(url):
     '''
@@ -399,35 +369,82 @@ def get_dependencies(client_socket, host, port):
     time.sleep(0.1)
 
     # get dependency.csv from the server
-    responses = handle_response(client_socket=client_socket)
-    logger.debug(f"Responses len for dependency: {len(responses)}")
-    # parse the response 
-    header, body = parse_response(response=responses[0])
+    for response in handle_response(client_socket=client_socket):
+        body, content_type, status = response
 
-    # get content type of the response
-    content_type = get_content_type(header)
+        if status != 200:
+            logger.error(f"File: {dependency_url[1:]} does not exist. Terminating the client.")
+            sys.exit(1)
+
+        logger.debug(f"Hanlding dependency response")
+     
+        if content_type == 'application':
+            # body = body.decode()
+
+            logger.debug(f"Dependency body: {body}")
+            # parse the dependency file and create n-ary tree of dependencies
+            dependency_root = create_dependency_tree(body)
+
+            return dependency_root
+        else:
+            logger.error("Unsupported content type for dependency file.")
+
+def parse_response(responses, index, offset):
+    '''
+        Function to get the header and body from the response.
+
+        Parameters:
+            @responses   - response received from server.
+            @index       - index to begin parsing
+            @offset      - offset till the end of the header
+
+        Output:
+            header          - header of the response
+            body            - body of the response
+            content_length  - length of the body in the response
+            content_type    - type of the received response
+    '''
+     
+    # select header
+    resp_header = responses[index: index + offset].decode()
+    # parse header fields
+    headers = resp_header.split("\r\n")
+
+    # iterate over headers
+    for header in headers:
+        # get fields of the header
+        fields = header.split(":")
+        
+        if "HTTP/1.1" in fields[0]:
+            status = int(fields[0].split(" ")[1])
+            
+        # get content length
+        if fields[0] == 'Content-Length':
+            content_length = int(fields[1].strip(" "))
+        # get content type
+        if fields[0] == 'Content-Type':
+            content_type = fields[1].strip(" ").split('/')[0]
+
+    # select body
+    body = responses[index + offset: index + offset + content_length]
     
-    if content_type == 'application':
+    # check if it is image
+    if content_type != 'image':
         body = body.decode()
 
-        logger.debug(f"Dependency body: {body}")
-        # parse the dependency file and create n-ary tree of dependencies
-        dependency_root = create_dependency_tree(body)
-
-        return dependency_root
-    else:
-        logger.error("Unsupported content type for dependency file.")
+    return headers, body, content_length, content_type, status  
 
 def handle_response(client_socket):
     '''
-        Function to handle the responses when pipelining.
-        The requests are parsed using "HTTP 1.1 200 OK" delimeter. 
+        Generator to handle the responses when pipelining.
+        The requests are parsed using "HTTP/1.1" delimeter. 
         
         Parameters:
             @client_socket - socket to send data
 
         Output:
-            responses - array of the responses to obtain
+            body         - body of the response
+            content_type - type of the received content
     '''
     
     # initialize array of responses to store
@@ -447,75 +464,46 @@ def handle_response(client_socket):
     except BlockingIOError:
         pass
     
-    logger.info(f"Response obtained")
-
-    # delimiter is hex form of "HTTP 1.1 200 OK"
-    http_pattern = b'\x48\x54\x54\x50\x2f\x31\x2e\x31\x20\x32\x30\x30\x20\x4f\x4b'
-    
-    # offset used to parse the data
-    offset = 0
-    # array of indices to not where string will be parsed
-    indices = []
+    logger.info(f"Response obtained: {len(server_response)} bytes")
     
     while True:
-        # get index of the pattern
-        index = server_response[offset:].find(http_pattern)
-
-        # store index
-        if index != -1:
-            indices.append(index + offset)
-        else:
-            indices.append(index)
+        # pattern to select the requests - HTTP/1.1
+        pattern = b"\x48\x54\x54\x50\x2f\x31\x2e\x31"
         
-        # calculate offset
-        offset = offset + index + len(http_pattern)
+        # find index of HTTP/1.1
+        index = server_response.find(pattern)
+        offset = 1
 
-        # stop if end was reached
-        if index == -1:
+        while True:
+            # get next piece of data and try to parse using CRLFCRLF 
+            chunk = server_response[index: index + offset]
+            header_index = chunk.find(b'\x0d\x0a\x0d\x0a')
+            
+            # if header line delimeter is present handle the response
+            if header_index != -1:
+                logger.info("Found new response")
+
+                # get properties of the response
+                
+                header, body, content_length, content_type, status = parse_response(server_response, index, offset)
+              
+                logger.debug(f"Header: {header}")
+                logger.debug(f"Content Length: {content_length}; Content-Type: {content_type}")
+                
+                # updat offset to the end of current response
+                offset += content_length
+                # delete handled response from the response string
+                server_response = server_response[index + offset:]
+
+                # return body and content type of processed request
+                yield body, content_type, status
+                break
+            else:
+                offset += 1
+
+        # when all responses are removed from the response string, length of the string is zero
+        if len(server_response) == 0:
             break
-
-    logger.info(f"Response parsed to indices: {indices}")    
-
-    # iterate over indices and divide responses
-    for index, val in enumerate(indices):
-        if index == 0:
-            continue
-
-        if indices[index] == -1:
-            response = server_response[indices[index-1]:]
-        else: 
-            response = server_response[indices[index-1]:indices[index]]
-        responses.append(response)
-
-    return responses
-
-def get_content_type(response_header):
-    '''
-        Function to get the content type of the response.
-
-        Parameters:
-            @header - header of the resposne
-        
-        Output:
-            content_type - type of the content
-    '''
-
-    headers = response_header.split('\r\n')
-    for header in headers:
-
-        fields = header.split(':')
-
-        # to filter out status line
-        if len(fields) <= 1:
-            continue
-
-        key = fields[0]
-        value = fields[1:]
-
-        if key == 'Content-Type':
-            content_type = value[0].strip(' ').split("/")[0]
-            logger.debug(f"Content Type: {content_type}")
-            return content_type
 
 def communicate(server):
     ''''
@@ -567,40 +555,28 @@ def communicate(server):
         for file_descriptor, event in events:
 
             if event & select.EPOLLIN:
-                # read the response
-                responses = handle_response(connections[file_descriptor])
-                logger.debug(f"Responses len: {len(responses)}")
-
-                # get list of expected files for this socket
+                
+                handled_responses = 0
                 queue = requests.get_queue(file_descriptor)
-                for index in range(len(responses)):
-                    
-                    header, body = None, None
+                
+                # read the response
+                for index, response in enumerate(handle_response(connections[file_descriptor])):
+                        body, content_type, status = response
+                        
+                        if status != 200:
+                            logger.error(f"File {queue[index]} does not exist.")
+                        else:    
+                            if content_type == 'image':
+                                create_file(queue[index], body, image_flag=True)
+                            else:
+                                create_file(queue[index], body, image_flag=False)
 
-                    # if ".png" in queue[index]:
-                    #     image_flag = True
-                    # else:
-                    #     image_flag = False
-
-                    # parse the response
-                    header, body = parse_response(response=responses[index])
-
-                    # get content type
-                    content_type = get_content_type(header)
-
-                    # create file   
-                    if content_type == 'text' or content_type == 'application':
-                        body = body.decode()
-                        create_file(queue[index], body, image_flag=False)
-                    elif content_type == 'image':
-                        create_file(queue[index], body, image_flag=True)
-                    else:
-                        logger.error("Unsupported content type.")
-
+                        handled_responses += 1
+            
                 # delete the reecived elements from the queue
-                if responses:
-                        requests.pop(file_descriptor, len(responses))
-                    
+                if handled_responses:
+                    requests.pop(file_descriptor, handled_responses)
+                
                 # if no elements remains in the queue of this socket
                 # unregister the socket 
                 if len(requests.get_queue(file_descriptor)) == 0:
@@ -611,7 +587,7 @@ def communicate(server):
                     connections[file_descriptor].close()
                     
                     del connections[file_descriptor]
-                
+              
             elif event & select.EPOLLOUT:
                 # send all requests that are scheduled for this socket - pipelining
                 for index, request in requests.get_request(file_descriptor):
@@ -621,7 +597,7 @@ def communicate(server):
 
                     requests.set_request(file_descriptor, index, request)
 
-                    logger.info(f"Requesting by {file_descriptor}")
+                    logger.info(f"Requesting for {file_descriptor}")
                 
                 # run clear function
                 requests.clear(file_descriptor)
@@ -639,7 +615,6 @@ def communicate(server):
                 epoll.unregister(file_descriptor)
                 logger.info(f"Unregistered: {file_descriptor}")
                 del connections[file_descriptor]
-
 
 if __name__ == "__main__":
 
